@@ -1,0 +1,181 @@
+# ModelDock GraphQL API. Mutations mirror the REST endpoints and call the
+# same service methods; GraphQL exists so dashboards can fetch a model, its
+# versions, per-environment status and recent history in one round trip.
+
+scalar Time
+
+type User {
+  id: ID!
+  name: String!
+  role: String!
+}
+
+type Model {
+  id: ID!
+  name: String!
+  description: String!
+  createdBy: String!
+  createdAt: Time!
+  versions: [ModelVersion!]!
+  "Current revision per environment (null if never deployed there)."
+  staging: Deployment
+  prod: Deployment
+  deployments(environment: String, limit: Int = 20): [Deployment!]!
+}
+
+type KeyValue {
+  key: String!
+  value: String!
+}
+
+type Resources {
+  cpuRequest: String!
+  memoryRequest: String!
+  cpuLimit: String!
+  memoryLimit: String!
+}
+
+type Scaling {
+  minReplicas: Int!
+  maxReplicas: Int!
+  targetCPUPercentage: Int!
+}
+
+type ModelVersion {
+  id: ID!
+  modelName: String!
+  version: String!
+  image: String!
+  port: Int!
+  metadata: [KeyValue!]!
+  resources: Resources!
+  scaling: Scaling!
+  "registered | staging | pending_approval | approved | production | superseded | rolled_back | failed"
+  state: String!
+  createdBy: String!
+  createdAt: Time!
+}
+
+type Deployment {
+  id: ID!
+  modelName: String!
+  version: String!
+  environment: String!
+  namespace: String!
+  revision: Int!
+  "deploy | promote | rollback | auto_rollback"
+  kind: String!
+  "pending | progressing | ready | failed | superseded | rolled_back"
+  status: String!
+  reason: String
+  createdBy: String!
+  createdAt: Time!
+  startedAt: Time
+  readyAt: Time
+  finishedAt: Time
+}
+
+type Approval {
+  id: ID!
+  modelName: String!
+  version: String!
+  status: String!
+  requestedBy: String!
+  requestedAt: Time!
+  decidedBy: String
+  decidedAt: Time
+  comment: String
+}
+
+type FieldChange {
+  field: String!
+  from: String!
+  to: String!
+}
+
+type VersionDiff {
+  model: String!
+  from: String!
+  to: String!
+  changes: [FieldChange!]!
+}
+
+type AuditEvent {
+  seq: Int!
+  id: ID!
+  type: String!
+  actor: String!
+  model: String
+  version: String
+  environment: String
+  deploymentId: String
+  occurredAt: Time!
+  "Event payload as a JSON string."
+  data: String!
+}
+
+type ModelHealth {
+  model: String!
+  lastDeployVersion: String!
+  lastDeployEnv: String!
+  lastDeployStatus: String!
+  lastDeployAt: Time
+  deploysTotal: Int!
+  deploysFailed: Int!
+  failureRate: Float!
+  rollbacksTotal: Int!
+  promotionsTotal: Int!
+  lastHealth: String!
+}
+
+type Query {
+  me: User!
+  models: [Model!]!
+  model(name: String!): Model
+  version(model: String!, version: String!): ModelVersion
+  deployment(id: ID!): Deployment
+  diff(model: String!, from: String!, to: String!): VersionDiff!
+  approvals(status: String): [Approval!]!
+  audit(model: String, before: Int, limit: Int = 50): [AuditEvent!]!
+  dashboard: [ModelHealth!]!
+}
+
+input KeyValueInput {
+  key: String!
+  value: String!
+}
+
+input ResourcesInput {
+  cpuRequest: String
+  memoryRequest: String
+  cpuLimit: String
+  memoryLimit: String
+}
+
+input ScalingInput {
+  minReplicas: Int
+  maxReplicas: Int
+  targetCPUPercentage: Int
+}
+
+input RegisterVersionInput {
+  model: String!
+  version: String!
+  image: String!
+  port: Int
+  metadata: [KeyValueInput!]
+  resources: ResourcesInput
+  scaling: ScalingInput
+}
+
+type Mutation {
+  createModel(name: String!, description: String): Model!
+  registerVersion(input: RegisterVersionInput!): ModelVersion!
+  deployToStaging(model: String!, version: String!): Deployment!
+  requestPromotion(model: String!, version: String!, comment: String): Approval!
+  approve(approvalId: ID!, comment: String): Approval!
+  reject(approvalId: ID!, comment: String): Approval!
+  promote(model: String!, version: String!): Deployment!
+  "Roll back to toVersion, or to the previous known-good version if omitted."
+  rollback(model: String!, environment: String!, toVersion: String): Deployment!
+}
