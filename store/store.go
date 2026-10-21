@@ -12,6 +12,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // migrate driver
@@ -69,7 +70,8 @@ type queries struct{ db querier }
 // Store is the entry point; it owns the connection pool.
 type Store struct {
 	queries
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	connConfig *pgx.ConnConfig
 }
 
 // Tx is an open transaction. It exposes the write operations.
@@ -80,7 +82,16 @@ type Tx struct {
 
 // Open connects to Postgres and verifies the connection.
 func Open(ctx context.Context, url string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("store: parse database URL: %w", err)
+	}
+	// pgx defaults to max(4, NumCPU) connections, which GraphQL's parallel
+	// field resolvers exhaust quickly. Respect an explicit pool_max_conns.
+	if !strings.Contains(url, "pool_max_conns") {
+		cfg.MaxConns = 20
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("store: connect: %w", err)
 	}
@@ -88,11 +99,14 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
-	return &Store{queries: queries{db: pool}, pool: pool}, nil
+	return &Store{queries: queries{db: pool}, pool: pool, connConfig: cfg.ConnConfig}, nil
 }
 
 // Close releases the pool.
 func (s *Store) Close() { s.pool.Close() }
+
+// PoolStats exposes connection pool statistics.
+func (s *Store) PoolStats() *pgxpool.Stat { return s.pool.Stat() }
 
 // Ping checks database connectivity (used by /readyz).
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
@@ -117,24 +131,26 @@ func (s *Store) InTx(ctx context.Context, fn func(*Tx) error) error {
 // TryLeader attempts to take a session-level advisory lock, giving simple
 // leader election among API replicas for singleton loops (outbox relay,
 // reconciler). If ok, the caller must call release when it stops leading.
+//
+// The lock lives on a dedicated connection outside the pool: a leader holds
+// it for the life of the process, and borrowing a pooled connection for that
+// would silently shrink the pool available to requests.
 func (s *Store) TryLeader(ctx context.Context, key int64) (release func(), ok bool, err error) {
-	conn, err := s.pool.Acquire(ctx)
+	conn, err := pgx.ConnectConfig(ctx, s.connConfig.Copy())
 	if err != nil {
-		return nil, false, fmt.Errorf("store: acquire conn for leader lock: %w", err)
+		return nil, false, fmt.Errorf("store: connect for leader lock: %w", err)
 	}
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&ok); err != nil {
-		conn.Release()
+		conn.Close(context.Background())
 		return nil, false, fmt.Errorf("store: try advisory lock %d: %w", key, err)
 	}
 	if !ok {
-		conn.Release()
+		conn.Close(context.Background())
 		return nil, false, nil
 	}
-	return func() {
-		// Use a fresh context: release must work during shutdown.
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
-		conn.Release()
-	}, true, nil
+	// Closing the session releases the lock; use a fresh context so release
+	// works during shutdown.
+	return func() { conn.Close(context.Background()) }, true, nil
 }
 
 // mapErr translates Postgres errors into domain sentinels.

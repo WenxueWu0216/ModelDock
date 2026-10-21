@@ -225,3 +225,25 @@ func TestDashboardDedup(t *testing.T) {
 		t.Fatalf("dashboard = %+v, %v", rows, err)
 	}
 }
+
+func TestLeaderLockIsExclusiveAndOutsidePool(t *testing.T) {
+	s := storetest.New(t)
+	ctx := context.Background()
+	rel1, ok, err := s.TryLeader(ctx, 42)
+	if err != nil || !ok {
+		t.Fatalf("first TryLeader = %v, %v", ok, err)
+	}
+	if _, ok, err := s.TryLeader(ctx, 42); err != nil || ok {
+		t.Fatalf("second TryLeader = %v, %v; want not leader", ok, err)
+	}
+	// Holding leadership must not occupy pooled connections.
+	if busy := s.PoolStats().AcquiredConns(); busy != 0 {
+		t.Fatalf("leader lock holds %d pooled connections", busy)
+	}
+	rel1()
+	rel2, ok, err := s.TryLeader(ctx, 42)
+	if err != nil || !ok {
+		t.Fatalf("TryLeader after release = %v, %v", ok, err)
+	}
+	rel2()
+}

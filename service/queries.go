@@ -93,6 +93,26 @@ func (s *Service) Status(ctx context.Context, u domain.User, model string) (Mode
 	return st, nil
 }
 
+// Current returns the current revision of model in env, or nil if it was
+// never deployed there.
+func (s *Service) Current(ctx context.Context, u domain.User, model string, env domain.Environment) (*domain.Deployment, error) {
+	if err := read(u); err != nil {
+		return nil, err
+	}
+	m, err := s.Store.GetModel(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	d, err := s.Store.CurrentDeployment(ctx, m.ID, env)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 // History returns deployment revisions of a model, newest first.
 func (s *Service) History(ctx context.Context, u domain.User, model string, env domain.Environment, limit int) ([]domain.Deployment, error) {
 	if err := read(u); err != nil {

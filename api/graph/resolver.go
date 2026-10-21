@@ -21,11 +21,7 @@ func (r *modelResolver) current(ctx context.Context, m *domain.Model, env domain
 	if err != nil {
 		return nil, err
 	}
-	st, err := r.Svc.Status(ctx, u, m.Name)
-	if err != nil {
-		return nil, err
-	}
-	return st.Current[env], nil
+	return r.Svc.Current(ctx, u, m.Name, env)
 }
 
 func (r *mutationResolver) decide(ctx context.Context, id string, approve bool, comment *string) (*domain.Approval, error) {
