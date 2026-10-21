@@ -137,6 +137,14 @@ func TestStatusFromDeployment(t *testing.T) {
 	}
 	d.Status.Conditions = []appsv1.DeploymentCondition{{
 		Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded", Message: "timed out"}}
+	// Stale condition: a new revision was just applied (generation 4) but the
+	// controller still reports the previous rollout's deadline failure. This
+	// must not fail the new revision (seen on kind when an auto-rollback
+	// followed a ProgressDeadlineExceeded).
+	if st := StatusFromDeployment(d); st.Failed {
+		t.Fatalf("stale condition from an unobserved generation treated as failure: %+v", st)
+	}
+	d.Status.ObservedGeneration = 4
 	if st := StatusFromDeployment(d); !st.Failed || !strings.Contains(st.Message, "ProgressDeadlineExceeded") {
 		t.Fatalf("failure not detected: %+v", st)
 	}

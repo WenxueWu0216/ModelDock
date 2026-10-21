@@ -195,6 +195,12 @@ func StatusFromDeployment(d *appsv1.Deployment) WorkloadStatus {
 	if d.Spec.Replicas != nil {
 		st.Desired = *d.Spec.Replicas
 	}
+	// Conditions describe the generation the controller last observed. Right
+	// after a new template is applied they can still carry the previous
+	// rollout's ProgressDeadlineExceeded, so ignore them until observed.
+	if st.Observed < st.Generation {
+		return st
+	}
 	for _, cond := range d.Status.Conditions {
 		switch {
 		case cond.Type == appsv1.DeploymentProgressing && cond.Reason == "ProgressDeadlineExceeded":
