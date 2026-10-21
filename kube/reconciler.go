@@ -80,10 +80,17 @@ func (r *Reconciler) Kick() {
 	}
 }
 
-// DeadlineSeconds is the progress deadline put on Deployments.
+// DeadlineSeconds is the progress deadline put on Deployments: 90% of
+// Timeout, so Kubernetes' ProgressDeadlineExceeded (which names the stuck
+// ReplicaSet) normally fires first and the reconciler's own timer is the
+// backstop for rollouts the controller cannot report on.
 func (r *Reconciler) DeadlineSeconds() int32 {
 	r.init()
-	return int32(r.Timeout / time.Second)
+	s := int32(r.Timeout * 9 / 10 / time.Second)
+	if s < 1 {
+		s = 1
+	}
+	return s
 }
 
 // ReconcileOnce runs one pass over in-flight and live deployments.

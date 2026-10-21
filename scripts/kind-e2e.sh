@@ -91,6 +91,10 @@ for _ in $(seq 1 150); do
 done
 curl -sf "localhost:$PORT/api/v1/deployments/$BAD" -H "$H" | jq -c '{status,reason}'
 [ "$S" = failed ] || fail "bad deployment not marked failed (status $S)"
+# The Kubernetes progress deadline (90% of the timeout) should win over the
+# reconciler's timer, exercising the condition-based failure path.
+curl -sf "localhost:$PORT/api/v1/deployments/$BAD" -H "$H" | jq -e '.reason | startswith("ProgressDeadlineExceeded")' >/dev/null \
+  || fail "expected failure via Kubernetes ProgressDeadlineExceeded"
 for _ in $(seq 1 90); do
   CUR=$(curl -sf "localhost:$PORT/api/v1/models/iris/status" -H "$H" | jq -r '.current.staging | .kind + " " + .version + " " + .status')
   [ "$CUR" = "auto_rollback 1.1.0 ready" ] && break; sleep 2

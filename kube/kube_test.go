@@ -281,6 +281,18 @@ func TestReconcilerHappyPath(t *testing.T) {
 	}
 }
 
+func TestDeadlineSecondsLeadsTimeout(t *testing.T) {
+	for _, c := range []struct {
+		timeout time.Duration
+		want    int32
+	}{{90 * time.Second, 81}, {5 * time.Minute, 270}, {500 * time.Millisecond, 1}} {
+		r := &Reconciler{Timeout: c.timeout}
+		if got := r.DeadlineSeconds(); got != c.want {
+			t.Errorf("DeadlineSeconds(%s) = %d, want %d", c.timeout, got, c.want)
+		}
+	}
+}
+
 func TestReconcilerTimeout(t *testing.T) {
 	rec, fake := newRecorder(), NewFake()
 	fake.OutcomeFor = func(WorkloadSpec) Outcome { return NeverReady }
