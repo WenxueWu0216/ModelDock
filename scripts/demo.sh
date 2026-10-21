@@ -15,7 +15,7 @@ call() { # call TOKEN METHOD PATH [JSON]
   curl -sS -X "$2" "$API$3" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' ${4:+-d "$4"}
 }
 wait_ready() { # wait_ready DEPLOYMENT_ID
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "${WAIT_SECS:-60}"); do
     s=$(call "$DEPLOYER" GET "/api/v1/deployments/$1" | jq -r .status)
     [ "$s" = ready ] && return 0
     [ "$s" = failed ] && { echo "deployment $1 failed"; return 1; }
