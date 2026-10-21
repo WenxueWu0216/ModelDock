@@ -1,0 +1,23 @@
+groups:
+  - name: modeldock
+    rules:
+      - alert: ModelDockOutboxStalled
+        expr: max(modeldock_outbox_oldest_age_seconds) > 120
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: Audit events are not reaching Kafka
+          description: The oldest unpublished outbox event is {{ $value | humanizeDuration }} old. Check Kafka and that one API replica holds the relay lock.
+      - alert: ModelDockRolloutFailures
+        expr: sum by (environment) (increase(modeldock_deploy_duration_seconds_count{outcome="failed"}[30m])) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: Rollouts failing in {{ $labels.environment }}
+      - alert: ModelDockAPIErrors
+        expr: |
+          sum(rate(modeldock_http_request_duration_seconds_count{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(modeldock_http_request_duration_seconds_count[5m])), 1e-9) > 0.02
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: ModelDock API 5xx ratio above 2%
