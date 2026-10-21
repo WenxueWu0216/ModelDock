@@ -9,7 +9,7 @@ Postgres and published to Kafka through a transactional outbox.
 > **Verification status, read first.** See [Verification status](#verification-status)
 > for exactly what ran where. In short: Postgres, Kafka, the API, the outbox
 > under `SIGKILL`, and the Docker images ran for real. Real pods ran on a
-> **kind** cluster in CI (`kind-e2e` job, [run 1 on PR #1](https://github.com/WenxueWu0216/ModelDock/actions/runs/39685895844)).
+> **kind** cluster in CI (`kind-e2e` job, [latest run on PR #1](https://github.com/WenxueWu0216/ModelDock/actions/runs/39693456877)).
 > Not yet exercised: HPA scaling, ModelDock itself running in-cluster via
 > Helm, and multi-replica failover.
 
@@ -318,14 +318,18 @@ exhaustion and unbounded-list bugs described in `docs/results.md`; both are fixe
 
 **Verified on a real cluster (kind, GitHub Actions `kind-e2e` job)**
 
-`scripts/kind-e2e.sh`, [CI run 39685895844](https://github.com/WenxueWu0216/ModelDock/actions/runs/39685895844):
+`scripts/kind-e2e.sh`, [CI run 39693456877](https://github.com/WenxueWu0216/ModelDock/actions/runs/39693456877):
 
 - The `kube.ClientGo` test saw a real rollout complete (`Updated:1 Ready:1 Available:1`).
 - ModelDock ran with `-kube real` and `-events kafka` and drove two versions
   through staging, approval, and prod, then rolled prod back. Afterwards prod's
   `/predict` returned `1.0.0 setosa` from a running pod.
-- An unpullable image was marked `failed` at the 90 s timeout, and staging
-  auto-rolled back to 1.1.0, which reached `ready`.
+- An unpullable image was marked `failed` through Kubernetes'
+  `ProgressDeadlineExceeded` (the deadline is 90% of the 90 s rollout timeout),
+  and staging auto-rolled back to 1.1.0, which reached `ready`. An earlier run
+  of this job caught a bug on exactly this path: the rollback was failed
+  instantly because of the previous rollout's stale condition. It is fixed in
+  `StatusFromDeployment`, with a regression test.
 
 The development sandbox itself could not start pods (its VM rejects the
 negative `oom_score_adj` that kubelet sets on pod sandboxes). Only the
