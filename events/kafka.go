@@ -136,9 +136,15 @@ func (c *DashboardConsumer) Run(ctx context.Context) error {
 			// Poison message: log and skip rather than wedge the partition.
 			log.Error("dashboard consumer: undecodable message, skipping", "offset", m.Offset, "err", err)
 		} else if _, err := c.Sink.ApplyDashboardEvent(ctx, ev); err != nil {
+			if ctx.Err() != nil {
+				return nil // shutdown; the uncommitted message is redelivered
+			}
 			return fmt.Errorf("dashboard consumer: apply %s: %w", ev.ID, err)
 		}
 		if err := r.CommitMessages(ctx, m); err != nil {
+			if ctx.Err() != nil {
+				return nil // shutdown; applying it again later is a no-op
+			}
 			return fmt.Errorf("dashboard consumer: commit offset %d: %w", m.Offset, err)
 		}
 	}
