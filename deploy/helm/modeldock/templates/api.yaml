@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modeldock.fullname" . }}-api
+  labels: {{- include "modeldock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels: {{- include "modeldock.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.api.port | quote }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "modeldock.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve]
+          env:
+            {{- include "modeldock.env" . | nindent 12 }}
+            - { name: MODELDOCK_ADDR, value: ":{{ .Values.api.port }}" }
+            - { name: MODELDOCK_KUBE, value: {{ .Values.config.kube | quote }} }
+            - { name: MODELDOCK_EVENTS, value: {{ .Values.config.events | quote }} }
+            - { name: MODELDOCK_KAFKA_CREATE_TOPICS, value: {{ .Values.config.kafkaCreateTopics | quote }} }
+            - { name: MODELDOCK_ROLLOUT_TIMEOUT, value: {{ .Values.config.rolloutTimeout | quote }} }
+            - { name: MODELDOCK_AUTO_ROLLBACK, value: {{ .Values.config.autoRollback | quote }} }
+            - { name: MODELDOCK_PLAYGROUND, value: {{ .Values.config.playground | quote }} }
+            - { name: MODELDOCK_JWT_ISSUER, value: {{ .Values.config.jwtIssuer | quote }} }
+            - { name: MODELDOCK_JWT_AUDIENCE, value: {{ .Values.config.jwtAudience | quote }} }
+          ports:
+            - { name: http, containerPort: {{ .Values.api.port }} }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "modeldock.fullname" . }}-api
+  labels: {{- include "modeldock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "modeldock.fullname" . }}-api
+  labels: {{- include "modeldock.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api

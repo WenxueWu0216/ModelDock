@@ -1,0 +1,59 @@
+{{- /* Least privilege: ModelDock only manages Deployments, Services and HPAs
+       in the target namespaces, plus reading/creating those namespaces. */ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "modeldock.fullname" . }}-namespaces
+  labels: {{- include "modeldock.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "modeldock.fullname" . }}-namespaces
+  labels: {{- include "modeldock.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "modeldock.fullname" . }}-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "modeldock.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- range .Values.targetNamespaces.names }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "modeldock.fullname" $ }}-workloads
+  namespace: {{ . }}
+  labels: {{- include "modeldock.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "modeldock.fullname" $ }}-workloads
+  namespace: {{ . }}
+  labels: {{- include "modeldock.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "modeldock.fullname" $ }}-workloads
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "modeldock.fullname" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
