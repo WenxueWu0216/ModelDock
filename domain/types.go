@@ -142,6 +142,7 @@ type Deployment struct {
 	VersionID   string           `json:"versionId"`
 	Version     string           `json:"version"`
 	Environment Environment      `json:"environment"`
+	Namespace   string           `json:"namespace"`
 	Revision    int              `json:"revision"`
 	Kind        DeploymentKind   `json:"kind"`
 	Status      DeploymentStatus `json:"status"`
