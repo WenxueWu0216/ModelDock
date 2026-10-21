@@ -117,7 +117,7 @@ type ComplexityRoot struct {
 		Name        func(childComplexity int) int
 		Prod        func(childComplexity int) int
 		Staging     func(childComplexity int) int
-		Versions    func(childComplexity int) int
+		Versions    func(childComplexity int, limit *int) int
 	}
 
 	ModelHealth struct {
@@ -211,7 +211,7 @@ type DeploymentResolver interface {
 	Status(ctx context.Context, obj *domain.Deployment) (string, error)
 }
 type ModelResolver interface {
-	Versions(ctx context.Context, obj *domain.Model) ([]domain.ModelVersion, error)
+	Versions(ctx context.Context, obj *domain.Model, limit *int) ([]domain.ModelVersion, error)
 	Staging(ctx context.Context, obj *domain.Model) (*domain.Deployment, error)
 	Prod(ctx context.Context, obj *domain.Model) (*domain.Deployment, error)
 	Deployments(ctx context.Context, obj *domain.Model, environment *string, limit *int) ([]domain.Deployment, error)
@@ -597,7 +597,12 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			break
 		}
 
-		return e.complexity.Model.Versions(childComplexity), true
+		args, err := ec.field_Model_versions_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Model.Versions(childComplexity, args["limit"].(*int)), true
 
 	case "ModelHealth.deploysFailed":
 		if e.complexity.ModelHealth.DeploysFailed == nil {
@@ -1189,6 +1194,21 @@ func (ec *executionContext) field_Model_deployments_args(ctx context.Context, ra
 		}
 	}
 	args["limit"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Model_versions_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 *int
+	if tmp, ok := rawArgs["limit"]; ok {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
+		arg0, err = ec.unmarshalOInt2ᚖint(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["limit"] = arg0
 	return args, nil
 }
 
@@ -3454,7 +3474,7 @@ func (ec *executionContext) _Model_versions(ctx context.Context, field graphql.C
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Model().Versions(rctx, obj)
+		return ec.resolvers.Model().Versions(rctx, obj, fc.Args["limit"].(*int))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -3471,7 +3491,7 @@ func (ec *executionContext) _Model_versions(ctx context.Context, field graphql.C
 	return ec.marshalNModelVersion2ᚕgithubᚗcomᚋwenxuewu0216ᚋmodeldockᚋdomainᚐModelVersionᚄ(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Model_versions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Model_versions(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Model",
 		Field:      field,
@@ -3504,6 +3524,17 @@ func (ec *executionContext) fieldContext_Model_versions(_ context.Context, field
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ModelVersion", field.Name)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Model_versions_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }

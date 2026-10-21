@@ -16,7 +16,8 @@ type Model {
   description: String!
   createdBy: String!
   createdAt: Time!
-  versions: [ModelVersion!]!
+  "Newest first; limit defaults to 50 (max 500)."
+  versions(limit: Int = 50): [ModelVersion!]!
   "Current revision per environment (null if never deployed there)."
   staging: Deployment
   prod: Deployment

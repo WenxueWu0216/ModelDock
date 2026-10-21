@@ -40,12 +40,16 @@ func (r *deploymentResolver) Status(ctx context.Context, obj *domain.Deployment)
 }
 
 // Versions is the resolver for the versions field.
-func (r *modelResolver) Versions(ctx context.Context, obj *domain.Model) ([]domain.ModelVersion, error) {
+func (r *modelResolver) Versions(ctx context.Context, obj *domain.Model, limit *int) ([]domain.ModelVersion, error) {
 	u, err := user(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.Svc.ListVersions(ctx, u, obj.Name)
+	n := 50
+	if limit != nil {
+		n = *limit
+	}
+	return r.Svc.ListVersions(ctx, u, obj.Name, n)
 }
 
 // Staging is the resolver for the staging field.

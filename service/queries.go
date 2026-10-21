@@ -34,15 +34,15 @@ func (s *Service) GetModel(ctx context.Context, u domain.User, name string) (dom
 	return s.Store.GetModel(ctx, name)
 }
 
-// ListVersions returns a model's versions, newest first.
-func (s *Service) ListVersions(ctx context.Context, u domain.User, model string) ([]domain.ModelVersion, error) {
+// ListVersions returns up to limit versions (default 50), newest first.
+func (s *Service) ListVersions(ctx context.Context, u domain.User, model string, limit int) ([]domain.ModelVersion, error) {
 	if err := read(u); err != nil {
 		return nil, err
 	}
 	if _, err := s.Store.GetModel(ctx, model); err != nil {
 		return nil, err
 	}
-	return s.Store.ListVersions(ctx, model)
+	return s.Store.ListVersions(ctx, model, limit)
 }
 
 // GetVersion returns one version.

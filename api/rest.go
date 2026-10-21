@@ -125,7 +125,8 @@ func (h *rest) routes(mux *routeMux) {
 		return 200, st, err
 	}))
 	mux.handle("GET /api/v1/models/{model}/versions", "list_versions", h.wrap(func(u domain.User, r *http.Request) (int, any, error) {
-		vs, err := h.svc.ListVersions(r.Context(), u, r.PathValue("model"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		vs, err := h.svc.ListVersions(r.Context(), u, r.PathValue("model"), limit)
 		return 200, vs, err
 	}))
 	mux.handle("POST /api/v1/models/{model}/versions", "register_version", h.wrap(func(u domain.User, r *http.Request) (int, any, error) {

@@ -114,11 +114,14 @@ func (q queries) GetVersionByID(ctx context.Context, id string) (domain.ModelVer
 	return v, wrap("get version "+id, err)
 }
 
-// ListVersions returns a model's versions, newest first.
-func (q queries) ListVersions(ctx context.Context, model string) ([]domain.ModelVersion, error) {
+// ListVersions returns up to limit of a model's versions, newest first.
+func (q queries) ListVersions(ctx context.Context, model string, limit int) ([]domain.ModelVersion, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
 	rows, err := q.db.Query(ctx, `SELECT `+versionCols+`
 		FROM model_versions v JOIN models m ON m.id = v.model_id
-		WHERE m.name = $1 ORDER BY v.created_at DESC, v.version DESC`, model)
+		WHERE m.name = $1 ORDER BY v.created_at DESC, v.version DESC LIMIT $2`, model, limit)
 	if err != nil {
 		return nil, wrap("list versions of "+model, err)
 	}
