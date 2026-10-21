@@ -197,7 +197,9 @@ func (r *recorder) GetVersionByID(context.Context, string) (domain.ModelVersion,
 	return r.version, nil
 }
 
-func (r *recorder) TryLeader(context.Context, int64) (func(), bool, error) { return func() {}, true, nil }
+func (r *recorder) TryLeader(context.Context, int64) (func(), bool, error) {
+	return func() {}, true, nil
+}
 
 func (r *recorder) set(id string, s domain.DeploymentStatus, call string) error {
 	r.mu.Lock()
