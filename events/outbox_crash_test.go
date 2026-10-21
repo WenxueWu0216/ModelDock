@@ -41,7 +41,9 @@ func (p filePublisher) Publish(_ context.Context, msgs []events.Message) error {
 	if err := f.Sync(); err != nil {
 		return err
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
 	if p.kill {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		select {} // never returns

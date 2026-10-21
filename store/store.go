@@ -141,16 +141,16 @@ func (s *Store) TryLeader(ctx context.Context, key int64) (release func(), ok bo
 		return nil, false, fmt.Errorf("store: connect for leader lock: %w", err)
 	}
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&ok); err != nil {
-		conn.Close(context.Background())
+		_ = conn.Close(context.Background())
 		return nil, false, fmt.Errorf("store: try advisory lock %d: %w", key, err)
 	}
 	if !ok {
-		conn.Close(context.Background())
+		_ = conn.Close(context.Background())
 		return nil, false, nil
 	}
 	// Closing the session releases the lock; use a fresh context so release
 	// works during shutdown.
-	return func() { conn.Close(context.Background()) }, true, nil
+	return func() { _ = conn.Close(context.Background()) }, true, nil
 }
 
 // mapErr translates Postgres errors into domain sentinels.

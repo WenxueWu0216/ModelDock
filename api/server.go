@@ -57,10 +57,10 @@ type routeMux struct {
 
 func (m *routeMux) handle(pattern, route string, h http.Handler) {
 	if m.metrics == nil {
-		m.ServeMux.Handle(pattern, h)
+		m.Handle(pattern, h)
 		return
 	}
-	m.ServeMux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.metrics.inflight.Inc()
 		defer m.metrics.inflight.Dec()
 		start := time.Now()
