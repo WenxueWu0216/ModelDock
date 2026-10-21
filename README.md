@@ -6,14 +6,12 @@ register model-server images as versions, deploy them to **staging**, get an
 in one call. Every state change is written to an append-only audit log in
 Postgres and published to Kafka through a transactional outbox.
 
-> **Verification status, read first.** Everything below is tested, but not
-> everything ran on a real cluster. See [Verification status](#verification-status)
+> **Verification status, read first.** See [Verification status](#verification-status)
 > for exactly what ran where. In short: Postgres, Kafka, the API, the outbox
-> under `SIGKILL`, and the Docker images ran for real. The Kubernetes client ran
-> against a **real k3s API server whose node could not start containers** (a
-> sandbox limitation). Pods actually becoming ready is covered by
-> `scripts/kind-e2e.sh` and the `kind-e2e` CI job, which had not run when this
-> README was written.
+> under `SIGKILL`, and the Docker images ran for real. Real pods ran on a
+> **kind** cluster in CI (`kind-e2e` job, [run 1 on PR #1](https://github.com/WenxueWu0216/ModelDock/actions/runs/39685895844)).
+> Not yet exercised: HPA scaling, ModelDock itself running in-cluster via
+> Helm, and multi-replica failover.
 
 ## Architecture
 
@@ -318,14 +316,23 @@ exhaustion and unbounded-list bugs described in `docs/results.md`; both are fixe
 | `modeldock serve -kube real` on k3s as the **chart's least-privilege service account**; the reconciler failed a never-ready rollout at the deadline ("not ready within 45s (updated=1 available=0 desired=1)") | manual run |
 | Helm install on k3s; `kubectl auth can-i` confirms the SA can manage workloads only in the target namespaces (no pods, secrets, or other namespaces) | manual run |
 
+**Verified on a real cluster (kind, GitHub Actions `kind-e2e` job)**
+
+`scripts/kind-e2e.sh`, [CI run 39685895844](https://github.com/WenxueWu0216/ModelDock/actions/runs/39685895844):
+
+- The `kube.ClientGo` test saw a real rollout complete (`Updated:1 Ready:1 Available:1`).
+- ModelDock ran with `-kube real` and `-events kafka` and drove two versions
+  through staging, approval, and prod, then rolled prod back. Afterwards prod's
+  `/predict` returned `1.0.0 setosa` from a running pod.
+- An unpullable image was marked `failed` at the 90 s timeout, and staging
+  auto-rolled back to 1.1.0, which reached `ready`.
+
+The development sandbox itself could not start pods (its VM rejects the
+negative `oom_score_adj` that kubelet sets on pod sandboxes). Only the
+k3s-based checks above ran there.
+
 **Not verified**
 
-- **Pods actually becoming ready on Kubernetes.** The sandbox VM rejects
-  negative `oom_score_adj`, which kubelet requires for pod sandboxes, so
-  `kind` (nested) and k3s could run the control plane but no pods.
-  `scripts/kind-e2e.sh` and the CI `kind-e2e` job cover this: pods running,
-  `/predict` serving the rolled-back version, and an unpullable image failing
-  and auto-rolling back. **This had not run when this README was written.**
 - HPA scaling behaviour (needs metrics-server), PodDisruptionBudget, and the
   ServiceMonitor (needs the Prometheus Operator).
 - Helm-deployed ModelDock pods running in-cluster (images were not pushed
