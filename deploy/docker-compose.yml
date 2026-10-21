@@ -1,0 +1,69 @@
+# Local stack: Postgres, single-node Kafka (KRaft), the ModelDock API and the
+# dashboard consumer. Kubernetes is the in-memory fake (MODELDOCK_KUBE=fake);
+# point MODELDOCK_KUBE=real + a kubeconfig at a cluster to deploy for real.
+name: modeldock
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: modeldock
+      POSTGRES_PASSWORD: modeldock
+      POSTGRES_DB: modeldock
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modeldock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  kafka:
+    image: ${KAFKA_IMAGE:-apache/kafka:3.8.0}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports: ["29092:29092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ${MODELDOCK_IMAGE:-modeldock/modeldock:dev}
+    command: ["serve"]
+    environment:
+      MODELDOCK_DATABASE_URL: postgres://modeldock:modeldock@postgres:5432/modeldock?sslmode=disable
+      MODELDOCK_JWT_SECRET: ${MODELDOCK_JWT_SECRET:-dev-only-secret-change-me-0123456789}
+      MODELDOCK_EVENTS: kafka
+      MODELDOCK_KAFKA_BROKERS: kafka:9092
+      MODELDOCK_KUBE: fake
+      MODELDOCK_AUTO_ROLLBACK: "true"
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  consumer:
+    image: ${MODELDOCK_IMAGE:-modeldock/modeldock:dev}
+    command: ["consume"]
+    environment:
+      MODELDOCK_DATABASE_URL: postgres://modeldock:modeldock@postgres:5432/modeldock?sslmode=disable
+      MODELDOCK_KAFKA_BROKERS: kafka:9092
+    depends_on:
+      api: { condition: service_started }
+    restart: on-failure

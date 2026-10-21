@@ -1,0 +1,23 @@
+# Scrape config for docker-compose / local runs. In Kubernetes use the
+# chart's ServiceMonitor (serviceMonitor.enabled=true) instead.
+global:
+  scrape_interval: 15s
+rule_files: [alerts.yml]
+scrape_configs:
+  - job_name: modeldock
+    static_configs: [{ targets: ["api:8080"] }]
+  # Model servers deployed by ModelDock carry prometheus.io/* pod annotations.
+  - job_name: model-servers
+    kubernetes_sd_configs: [{ role: pod, namespaces: { names: [modeldock-staging, modeldock-prod] } }]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: model
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_version]
+        target_label: version

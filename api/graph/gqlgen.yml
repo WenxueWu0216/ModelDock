@@ -1,0 +1,59 @@
+schema:
+  - schema.graphqls
+
+exec:
+  filename: generated.go
+  package: graph
+
+model:
+  filename: models_gen.go
+  package: graph
+
+resolver:
+  layout: follow-schema
+  dir: .
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+omit_slice_element_pointers: true
+
+models:
+  ID:
+    model:
+      - github.com/99designs/gqlgen/graphql.ID
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int
+      - github.com/99designs/gqlgen/graphql.Int32
+      - github.com/99designs/gqlgen/graphql.Int64
+  User:
+    model: github.com/wenxuewu0216/modeldock/domain.User
+  Model:
+    model: github.com/wenxuewu0216/modeldock/domain.Model
+    fields:
+      versions: { resolver: true }
+      staging: { resolver: true }
+      prod: { resolver: true }
+      deployments: { resolver: true }
+  ModelVersion:
+    model: github.com/wenxuewu0216/modeldock/domain.ModelVersion
+    fields:
+      metadata: { resolver: true }
+  Resources:
+    model: github.com/wenxuewu0216/modeldock/domain.Resources
+  Scaling:
+    model: github.com/wenxuewu0216/modeldock/domain.Scaling
+  Deployment:
+    model: github.com/wenxuewu0216/modeldock/domain.Deployment
+  Approval:
+    model: github.com/wenxuewu0216/modeldock/domain.Approval
+  FieldChange:
+    model: github.com/wenxuewu0216/modeldock/domain.FieldChange
+  VersionDiff:
+    model: github.com/wenxuewu0216/modeldock/domain.VersionDiff
+  AuditEvent:
+    model: github.com/wenxuewu0216/modeldock/events.Event
+    fields:
+      data: { resolver: true }
+  ModelHealth:
+    model: github.com/wenxuewu0216/modeldock/events.ModelHealth

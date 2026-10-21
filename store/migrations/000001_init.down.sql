@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS dashboard_processed_events;
+DROP TABLE IF EXISTS dashboard_model_health;
+DROP TABLE IF EXISTS outbox;
+DROP TRIGGER IF EXISTS audit_events_no_truncate ON audit_events;
+DROP TRIGGER IF EXISTS audit_events_no_update ON audit_events;
+DROP TABLE IF EXISTS audit_events;
+DROP FUNCTION IF EXISTS audit_events_immutable();
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS deployments;
+DROP TABLE IF EXISTS model_versions;
+DROP TABLE IF EXISTS models;
+DROP TABLE IF EXISTS environments;

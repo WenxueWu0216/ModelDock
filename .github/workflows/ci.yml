@@ -1,0 +1,100 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22.x" }
+      - name: gofmt
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))" || (gofmt -l $(git ls-files '*.go'); exit 1)
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2024.1.1 ./...
+      - name: generated GraphQL code is up to date
+        run: |
+          (cd api/graph && go run github.com/99designs/gqlgen generate)
+          git diff --exit-code -- api/graph
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 3s --health-retries 30
+      kafka:
+        # The image's default config is a single-node KRaft broker
+        # advertising localhost:9092.
+        image: apache/kafka:3.8.0
+        ports: ["9092:9092"]
+    env:
+      MODELDOCK_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      MODELDOCK_TEST_KAFKA_BROKERS: localhost:9092
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22.x" }
+      - name: wait for Kafka
+        run: |
+          for i in $(seq 1 60); do (echo > /dev/tcp/localhost/9092) 2>/dev/null && exit 0; sleep 2; done; exit 1
+      - name: go test (race, Postgres + Kafka integration, crash-consistency)
+        run: go test -race -count=1 -coverprofile=coverage.txt ./...
+      - name: coverage summary
+        run: go tool cover -func=coverage.txt | tail -1
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22.x" }
+      - uses: azure/setup-helm@v4
+        with: { version: v3.16.2 }
+      - name: kubeconform rendered model manifests and Helm chart
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          make manifests GOBIN=$(go env GOPATH)/bin
+
+  model-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r model-server/requirements-dev.txt
+      - run: python -m pytest -q model-server/tests
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/Dockerfile -t modeldock/modeldock:ci .
+      - run: docker build -t modeldock/iris-server:ci model-server
+
+  kind-e2e:
+    # Real Kubernetes: model-server pods must actually become ready.
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22.x" }
+      - name: install kind
+        run: go install sigs.k8s.io/kind@v0.24.0 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: e2e
+        run: KEEP=0 ./scripts/kind-e2e.sh
