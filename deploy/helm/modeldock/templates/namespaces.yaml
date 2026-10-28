@@ -1,0 +1,12 @@
+{{- if .Values.targetNamespaces.create }}
+{{- range .Values.targetNamespaces.names }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  labels:
+    app.kubernetes.io/managed-by: modeldock
+    pod-security.kubernetes.io/enforce: restricted
+{{- end }}
+{{- end }}

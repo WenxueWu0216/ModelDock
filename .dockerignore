@@ -1,0 +1,5 @@
+bin/
+model-server/
+docs/
+loadtest/
+.git/

@@ -1,0 +1,15 @@
+version: "2"
+linters:
+  default: standard
+  exclusions:
+    generated: strict
+    rules:
+      # Deferred Close on read paths and test fixtures: nothing useful to do
+      # with the error. Closes after writes are checked explicitly.
+      - linters: [errcheck]
+        source: "^\\s*defer .*\\.Close\\("
+      - linters: [errcheck]
+        path: _test\.go
+        source: "\\.Close\\("
+formatters:
+  enable: [gofmt]

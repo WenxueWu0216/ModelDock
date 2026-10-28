@@ -1,0 +1,6 @@
+apiVersion: v2
+name: modeldock
+description: ModelDock model deployment control plane (API, outbox relay, reconciler, dashboard consumer)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
