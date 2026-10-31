@@ -32,6 +32,7 @@ import (
 	"github.com/wenxuewu0216/modeldock/kube"
 	"github.com/wenxuewu0216/modeldock/service"
 	"github.com/wenxuewu0216/modeldock/store"
+	"github.com/wenxuewu0216/modeldock/stream"
 )
 
 func env(key, def string) string {
@@ -113,6 +114,8 @@ func serve(ctx context.Context, log *slog.Logger, args []string) error {
 	autoRollback := fs.Bool("auto-rollback", env("MODELDOCK_AUTO_ROLLBACK", "false") == "true", "roll back automatically when a rollout fails")
 	interval := fs.Duration("reconcile-interval", envDuration("MODELDOCK_RECONCILE_INTERVAL", 2*time.Second), "reconciler poll interval")
 	playground := fs.Bool("playground", env("MODELDOCK_PLAYGROUND", "true") == "true", "serve GraphQL playground at /playground")
+	corsOrigins := fs.String("cors-origins", env("MODELDOCK_CORS_ORIGINS", "http://localhost:5173"), "comma-separated browser origins allowed by CORS (\"*\" = any, empty = CORS off)")
+	streamPoll := fs.Duration("stream-poll-interval", envDuration("MODELDOCK_STREAM_POLL_INTERVAL", 200*time.Millisecond), "how often the SSE tailer polls the audit log")
 	fakeReadyPolls := fs.Int("fake-ready-polls", 1, "fake kube: status polls before a rollout is ready")
 	_ = fs.Parse(args)
 
@@ -176,15 +179,27 @@ func serve(ctx context.Context, log *slog.Logger, args []string) error {
 	rec := &kube.Reconciler{Store: st, Kube: kc, Transitions: svc, Timeout: *timeout, Interval: *interval, Log: log}
 	svc.Kicker = rec
 	relay := &events.Relay{Source: st, Lock: st, Publisher: pub, Log: log}
+	hub := stream.NewHub(stream.DefaultBuffer, stream.NewMetrics(reg))
+	tailer := &stream.Tailer{Source: st, Hub: hub, Interval: *streamPoll, Log: log}
+	if err := tailer.Init(ctx); err != nil {
+		return err
+	}
+	var origins []string
+	if *corsOrigins != "" {
+		origins = strings.Split(*corsOrigins, ",")
+	}
 
 	handler := api.NewHandler(api.Config{
 		Service: svc, Auth: authn, Metrics: api.NewHTTPMetrics(reg), Gatherer: reg, Log: log,
-		Ready: st.Ping, Playground: *playground,
+		Ready: st.Ping, Playground: *playground, Hub: hub, CORSOrigins: origins,
 	})
 	srv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	// End open event streams on shutdown so Shutdown does not wait for them.
+	srv.RegisterOnShutdown(hub.Close)
 
 	go rec.Run(ctx)
 	go relay.Run(ctx)
+	go tailer.Run(ctx)
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("modeldock listening", "addr", *addr, "kube", *kubeMode, "events", *eventsMode, "auto_rollback", *autoRollback)
