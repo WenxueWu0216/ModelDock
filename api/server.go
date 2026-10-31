@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -88,6 +89,10 @@ type Config struct {
 	StreamHeartbeat time.Duration
 	// CORSOrigins lists browser origins allowed to call the API ("*" = any).
 	CORSOrigins []string
+	// Console, if set, is the built web console served at / (see package web).
+	// ServeConsole without Console serves a note on how to build it.
+	Console      fs.FS
+	ServeConsole bool
 }
 
 // NewHandler builds the full HTTP handler: unauthenticated health and
@@ -136,6 +141,11 @@ func NewHandler(cfg Config) http.Handler {
 	root.Handle("/graphql", mw(authed))
 	if cfg.Playground {
 		root.Handle("GET /playground", playgroundHandler())
+	}
+	if cfg.ServeConsole || cfg.Console != nil {
+		// "/" is the least specific pattern, so /api/, /graphql, /metrics
+		// and the health checks always take precedence.
+		root.Handle("/", consoleHandler(cfg.Console))
 	}
 	return withCORS(cfg.CORSOrigins, root)
 }

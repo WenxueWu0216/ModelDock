@@ -1,0 +1,20 @@
+//go:build embedweb
+
+package web
+
+import (
+	"embed"
+	"io/fs"
+)
+
+//go:embed all:dist
+var dist embed.FS
+
+// FS returns the built console (web/dist) embedded in the binary.
+func FS() (fs.FS, bool) {
+	sub, err := fs.Sub(dist, "dist")
+	if err != nil {
+		return nil, false
+	}
+	return sub, true
+}
