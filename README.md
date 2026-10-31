@@ -4,7 +4,11 @@ A model deployment control plane for Kubernetes, written in Go 1.22. You
 register model-server images as versions, deploy them to **staging**, get an
 **approval** from a different person, **promote** to **prod**, and **roll back**
 in one call. Every state change is written to an append-only audit log in
-Postgres and published to Kafka through a transactional outbox.
+Postgres and published to Kafka through a transactional outbox. A React +
+TypeScript console (approval queue, version diff, deployment timeline) shows
+rollout status live, streamed to the browser over Server-Sent Events.
+
+![Deployment timeline, updated live over SSE](docs/screenshots/timeline.png)
 
 > **Verification status, read first.** See [Verification status](#verification-status)
 > for exactly what ran where. In short: Postgres, Kafka, the API, the outbox
@@ -19,12 +23,13 @@ Postgres and published to Kafka through a transactional outbox.
 flowchart LR
   subgraph clients[Clients]
     CLI[curl / CI pipeline]
-    UI[Dashboards]
+    WEB[Web console<br/>React + TS, embedded]
   end
   subgraph md[ModelDock API process]
     AUTH[JWT auth + RBAC]
     REST[REST /api/v1]
     GQL[GraphQL /graphql]
+    SSE[SSE /api/v1/events/stream<br/>hub + audit tailer]
     SVC[service: state machine,<br/>approval gate, rollback]
     REC[kube.Reconciler<br/>leader-elected]
     RELAY[outbox relay<br/>leader-elected]
@@ -39,9 +44,12 @@ flowchart LR
   PROM[Prometheus / Grafana]
 
   CLI --> AUTH
-  UI --> AUTH
+  WEB -- "REST, GraphQL" --> AUTH
   AUTH --> REST --> SVC
   AUTH --> GQL --> SVC
+  AUTH --> SSE
+  PG -- "audit_events by seq" --> SSE
+  SSE -- "text/event-stream" --> WEB
   SVC -- "one tx: state + audit + outbox" --> PG
   SVC -. kick .-> REC
   REC -- "pending → apply (SSA)" --> S & P
@@ -96,25 +104,31 @@ rollback nor a direct deploy can get around the approval gate.
 | `store/` | Postgres via pgx, embedded golang-migrate migrations, outbox claim, audit log, dashboard read model |
 | `events/` | Event envelope and topics, outbox relay, Kafka publisher, dashboard consumer |
 | `kube/` | `Client` interface, manifest builder, **`Fake`** (tests) and **`ClientGo`** (real) implementations, reconciler |
-| `api/` | REST (Go 1.22 `ServeMux` patterns) and GraphQL (gqlgen, `api/graph`), HTTP metrics |
+| `api/` | REST (Go 1.22 `ServeMux` patterns), GraphQL (gqlgen, `api/graph`), the SSE endpoint, CORS, console serving, HTTP metrics |
+| `stream/` | SSE fan-out hub (bounded per-client buffers) and the ordered audit-log tailer that feeds it |
+| `web/` | React 18 + TypeScript + Vite console; `web/embed.go` embeds `web/dist` with `-tags embedweb` |
 | `cmd/modeldock/` | `serve`, `consume`, `migrate`, `token`, `render` |
 | `model-server/` | Sample FastAPI + scikit-learn Iris server: `/health`, `/predict`, `/metrics` |
 | `deploy/` | Dockerfile, docker-compose (Postgres, Kafka KRaft, API, consumer), Helm chart |
 | `observability/` | Grafana dashboard JSON, Prometheus scrape config and alert rules |
 | `loadtest/`, `docs/results.md` | vegeta script and the measured results |
-| `scripts/` | `demo.sh` (curl + GraphQL walkthrough), `kind-e2e.sh` (real-cluster test) |
+| `scripts/` | `demo.sh` (curl + GraphQL walkthrough), `demo-live.sh` (rollout to watch in the console), `console-walkthrough.cjs` (Playwright checks + screenshots), `kind-e2e.sh` (real-cluster test) |
 
 ## Quick start
 
 ```sh
 make setup          # Go modules, staticcheck, kubeconform, model-server venv
 make test           # starts Postgres + Kafka via compose, runs every Go test
-make compose-up     # Postgres, Kafka, API (:8080, fake kube), dashboard consumer
+make compose-up     # Postgres, Kafka, API + web console (:8080, fake kube), dashboard consumer
 make demo           # walkthrough below, against the running stack
 ```
 
+Then open <http://localhost:8080> and paste a token from
+`go run ./cmd/modeldock token -sub alice -role approver` (see [Web console](#web-console)).
+
 `make help` lists all targets: `lint`, `manifests`, `model-server-test`,
-`loadtest`, `kind-e2e`, `images`, and so on.
+`web`, `web-test`, `web-dev`, `demo-live`, `walkthrough`, `loadtest`,
+`kind-e2e`, `images`, and so on.
 
 To deploy model servers for real, run the API with `-kube real` and a
 kubeconfig (`modeldock serve -kube real -kubeconfig ~/.kube/config`), or install
@@ -191,6 +205,79 @@ mutation { rollback(model: "iris", environment: "prod") { revision version kind 
 
 Errors carry `extensions.code`: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`,
 `CONFLICT`, `BAD_USER_INPUT`, or `INTERNAL`.
+
+## Web console
+
+React 18 + TypeScript (strict) + Vite, in [`web/`](web). Runtime dependencies
+are `react` and `react-dom` only: plain `fetch` for REST and GraphQL, a
+30-line hash router, hand-written CSS.
+
+| Page | What | API |
+|---|---|---|
+| Sign in | Paste a JWT (`modeldock token …`). It is kept in `sessionStorage` for the tab; any 401 signs you out. | – |
+| Models | Every model with its current staging/prod version and status | GraphQL, one query (replaces `GET /models` + a status call per model) |
+| Model | Versions, current revisions, recent history, pending approvals | GraphQL, one query (replaces four REST calls) |
+| Approvals | Pending promotion requests, each with an inline diff against what runs in prod. Approve/reject buttons only for `approver`/`admin`. The four-eyes rule stays in the API; its 403 is shown as a clear message. | REST |
+| Timeline | Revisions per model per environment: revision, version, kind (`deploy`/`promote`/`rollback`/`auto_rollback`), status, who, when, failure reason | REST + SSE |
+| Diff | Pick two versions, see the field-level diff | REST |
+
+**Live status.** One `EventSource` per session subscribes to
+`/api/v1/events/stream`. The timeline folds each event into the history it
+already loaded ([`web/src/timeline.ts`](web/src/timeline.ts)): a `pending`
+event adds the new revision and marks the previous one superseded or rolled
+back; later events flip its badge to `progressing`, `ready` or `failed` in
+place, without a refetch. The header shows `live` or `reconnecting`. The
+browser resumes with `Last-Event-ID`; if it gives up, the client reopens with
+`?lastEventId=`. Events are de-duplicated by `seq`. Every reconnect also
+reloads the page's data, so the view cannot stay stale.
+
+| Approval queue with inline diff | Four-eyes rule (403 from the API) |
+|---|---|
+| ![Approval queue](docs/screenshots/approval-queue.png) | ![Four-eyes 403](docs/screenshots/approval-four-eyes-403.png) |
+| **Prod promotion in progress, updated live** | **Version diff** |
+| ![Timeline mid-rollout](docs/screenshots/timeline-live-progressing.png) | ![Version diff](docs/screenshots/version-diff.png) |
+| **Model page (one GraphQL query)** | **Reconnecting during an API restart** |
+| ![Model page](docs/screenshots/model-graphql.png) | ![Reconnecting](docs/screenshots/reconnecting.png) |
+
+**Serving: embedded in the Go binary.** `make build` runs `npm ci && npm run
+build` in `web/` and compiles with `-tags embedweb`. The binary then serves
+the console at `/`: hashed assets are cached as immutable, `index.html` is
+served for client routes, and `/api`, `/graphql` and `/metrics` keep
+precedence. The Docker image does the same in a Node build stage, so `make
+compose-up` serves the console on :8080. I chose embedding over a separate
+compose service for three reasons: one artifact to deploy, same origin (no
+CORS, and the SSE token never crosses origins), and the console version
+always matches the API it talks to. Without the tag (`go build ./...`, `go
+test ./...`, `make build-go`) the binary serves a short note at `/`, so Go
+work never needs Node. `-console=false` turns the route off.
+
+**Development.**
+
+```sh
+make run            # API on :8080 (or: make compose-up)
+make web-dev        # Vite on :5173 with hot reload; proxies /api and /graphql to :8080
+make web-test       # tsc --noEmit + Vitest (jsdom, Testing Library)
+```
+
+To call the API cross-origin instead of through the proxy, set
+`VITE_API_BASE=http://localhost:8080`. The API allows
+`http://localhost:5173` by default (`-cors-origins`).
+
+### Watch a rollout live
+
+```sh
+FAKE_READY_POLLS=3 FAKE_FAIL_IMAGE=broken make compose-up   # rollouts take ~6 s; "broken" images fail
+make demo-live                                             # prints tokens, then drives the rollout
+```
+
+Open <http://localhost:8080>, paste the approver token it prints, and pick
+the model it names on the Timeline page. The script deploys 1.0.0 and 1.1.0
+to staging, requests and approves promotion, promotes to prod, deploys a
+broken 1.2.0 that fails and auto-rolls back, and finally rolls prod back.
+Each badge changes as it happens. With `APPROVE=browser` the script waits
+for you to approve in the Approvals page. `make walkthrough` runs the same
+kind of flow headless with Playwright, asserts each step in the DOM, and
+regenerates the screenshots.
 
 ## Live event stream (SSE)
 
@@ -390,6 +477,9 @@ manager `modeldock`).
   - `modeldock_approval_decisions_total`
   - the outbox metrics: backlog, oldest age, published, errors
   - `modeldock_inference_health_changes_total`
+  - the event stream metrics: `modeldock_sse_connections`,
+    `modeldock_sse_events_sent_total`, `modeldock_sse_slow_client_drops_total`,
+    `modeldock_sse_tailer_gaps_skipped_total`
 - Model servers expose `model_predictions_total`, `model_prediction_latency_seconds`
   and `model_info`. ModelDock adds `prometheus.io/*` pod annotations.
 - [`observability/grafana/modeldock-dashboard.json`](observability/grafana/modeldock-dashboard.json)
@@ -456,6 +546,48 @@ The development sandbox itself could not start pods (its VM rejects the
 negative `oom_score_adj` that kubelet sets on pod sandboxes). Only the
 k3s-based checks above ran there.
 
+**Web console and event stream (verified in the development sandbox)**
+
+| What | How |
+|---|---|
+| Hub: fan-out, model filter, slow-client drop without blocking `Publish`, unsubscribe on context cancel, close on shutdown, concurrent subscribe/publish | `stream/hub_test.go`, `go test -race` |
+| Tailer: starts at the end of the log, publishes in `seq` order, holds back behind an uncommitted gap until it fills, skips a permanent gap after the timeout | `stream/tailer_test.go` |
+| SSE over HTTP against real Postgres: headers, live `pending → progressing → ready` for a real rollout through the reconciler, approval events, `?model=` filter, `Last-Event-ID` replay then live with no gap or duplicate, `?lastEventId=`, heartbeat, metrics, 401/404/400 cases, CORS preflight | `api/stream_test.go` (httptest) |
+| Console handler: SPA fallback, asset caching, API precedence, placeholder without the embed | `api/console_test.go` |
+| `go vet`, staticcheck 2024.1.1 and `go test -race -count=1 ./...` with Postgres 16 and Kafka 3.8 from compose, on Go 1.22.12 | local |
+| Console: `tsc --noEmit`, `vite build`, 12 Vitest + Testing Library tests (approval queue: list + inline diff, role-gated buttons, four-eyes 403 message, approve with comment, live refetch; timeline: render, in-place live updates without refetch, de-dup, reconnect with `lastEventId` and reload; `applyEvent` unit tests) | `make web-test` |
+| `curl -N` against `modeldock serve`: live frames, `Last-Event-ID: 3` replays seq 4–5, `/metrics` exposes the SSE metrics | manual run |
+| Compose stack with the console embedded in the image: `scripts/demo.sh` and `scripts/demo-live.sh` end to end | local (see note) |
+| Playwright (headless Chromium) against the compose stack, 13 DOM-level checks: live progressing/ready badges with no history refetch, approval queue + inline diff, four-eyes 403 for an admin who requested, approve from the queue, failure + auto-rollback shown live, `reconnecting → live` across `docker compose restart api` with updates continuing after it, diff page, GraphQL model page | `scripts/console-walkthrough.cjs` |
+
+Note on the image: Docker Hub rate-limited the sandbox (HTTP 429), and its
+TLS-intercepting egress proxy is not trusted inside `docker build`. So I
+built the image from a copy of `deploy/Dockerfile` that only adds the
+sandbox proxy's CA certificate to the two build stages. The committed
+Dockerfile is otherwise what ran. The `web` CI job is new and has not run
+yet; the workflow runs it on pull requests.
+
+**Measured: event latency to the browser.** `scripts/console-walkthrough.cjs`
+keeps an `EventSource` open in a separate tab and records `Date.now()` on
+receipt minus the event's `occurredAt`. `occurredAt` is set by the API
+process when it creates the event, just before the transaction commits, so
+this is an upper bound on commit-to-browser time. Browser and API container
+ran on the same host and share a clock. Setup: compose stack, default 200 ms
+tailer poll interval, one viewer, the walkthrough's deploy/promote/rollback/
+approval events (registry events excluded). Events replayed after the API
+restart are excluded, because they include downtime.
+
+| Run | Events | min | p50 | p95 | max |
+|---|---:|---:|---:|---:|---:|
+| 1 | 25 | 70 ms | 152 ms | 202 ms | 204 ms |
+| 2 (fresh volumes) | 25 | 19 ms | 112 ms | 199 ms | 201 ms |
+
+The spread matches the poll interval: an event waits between 0 and 200 ms
+for the next poll. Lowering `-stream-poll-interval` trades latency for
+queries per second. Not measured: many concurrent SSE clients,
+multi-replica fan-out, and behaviour behind a buffering reverse proxy
+(`X-Accel-Buffering: no` is set for nginx but untested).
+
 **Not verified**
 
 - HPA scaling behaviour (needs metrics-server), PodDisruptionBudget, and the
@@ -496,7 +628,15 @@ kubectl -n modeldock-prod get deploy,svc,hpa,pods
 - Outbox polling adds up to one interval (500 ms) of lag. Kafka downtime
   grows the backlog (alerted on) but never blocks the API.
 - The dashboard read model is eventually consistent and depends on Kafka.
-- HS256 shared-secret JWTs; no token revocation. There is no UI.
+- HS256 shared-secret JWTs; no token revocation. The console has no login
+  flow of its own: you paste a token. The SSE endpoint accepts the token in
+  the URL (`EventSource` cannot send headers), where proxies may log it.
+- Live delivery adds up to one tailer poll interval (200 ms) of latency, and
+  each API replica runs one audit-log query per interval. A transaction that
+  commits more than 3 s after taking its audit sequence number is skipped by
+  open streams (it is still in the audit log and appears on reload).
+- The console is desktop-first and has no write actions besides
+  approve/reject. Deploy, promote and rollback stay in the API, CLI and CI.
 - Rollback to a version that has since been redeployed to staging is refused
   (its state is `staging`, not `superseded`/`rolled_back`). Promote it again instead.
 - The `environments` table is seeded with staging/prod; there is no API to add more.
