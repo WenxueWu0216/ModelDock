@@ -58,6 +58,8 @@ func Project(h *ModelHealth, ev Event) bool {
 	switch ev.Type {
 	case TypeDeployRequested:
 		h.LastDeployVersion, h.LastDeployEnv, h.LastDeployStatus, h.LastDeployAt = ev.Version, ev.Environment, "pending", &at
+	case TypeDeployProgressing:
+		h.setStatusIfLatest(ev, "progressing")
 	case TypeDeployReady:
 		h.DeploysTotal++
 		h.setStatusIfLatest(ev, "ready")

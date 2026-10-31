@@ -423,13 +423,19 @@ func rollbackTx(ctx context.Context, tx *store.Tx, m domain.Model, env domain.En
 
 var _ kube.Transitions = (*Service)(nil)
 
-// MarkProgressing records that a pending deployment was applied.
+// MarkProgressing records that a pending deployment was applied. Like every
+// other status change it writes an audit event in the same transaction, so
+// the live event stream (and its replay) sees pending -> progressing.
 func (s *Service) MarkProgressing(ctx context.Context, id string) error {
 	err := s.Store.InTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.UpdateDeployment(ctx, id, store.DeploymentUpdate{
+		d, err := tx.UpdateDeployment(ctx, id, store.DeploymentUpdate{
 			From: []domain.DeploymentStatus{domain.DeployPending}, To: domain.DeployProgressing, StartedAt: time.Now(),
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.AppendEvent(ctx, event(events.TypeDeployProgressing, SystemActor, d.ModelName, d.Version, d.Environment, d.ID,
+			map[string]any{"revision": d.Revision, "kind": d.Kind}))
 	})
 	if err != nil {
 		return fmt.Errorf("service: mark %s progressing: %w", id, err)

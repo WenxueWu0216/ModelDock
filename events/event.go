@@ -16,6 +16,7 @@ const (
 	TypeModelRegistered    = "registry.model_registered"
 	TypeVersionRegistered  = "registry.version_registered"
 	TypeDeployRequested    = "deploy.requested"
+	TypeDeployProgressing  = "deploy.progressing"
 	TypeDeployReady        = "deploy.ready"
 	TypeDeployFailed       = "deploy.failed"
 	TypePromotionRequested = "approval.requested"

@@ -210,12 +210,12 @@ func TestFullLifecycle(t *testing.T) {
 	}
 	want := []string{
 		events.TypeModelRegistered, events.TypeVersionRegistered,
-		events.TypeDeployRequested, events.TypeDeployReady,
-		events.TypePromotionRequested, events.TypeApprovalApproved, events.TypePromoteStarted, events.TypeDeployReady,
+		events.TypeDeployRequested, events.TypeDeployProgressing, events.TypeDeployReady,
+		events.TypePromotionRequested, events.TypeApprovalApproved, events.TypePromoteStarted, events.TypeDeployProgressing, events.TypeDeployReady,
 		events.TypeVersionRegistered,
-		events.TypeDeployRequested, events.TypeDeployReady,
-		events.TypePromotionRequested, events.TypeApprovalApproved, events.TypePromoteStarted, events.TypeDeployReady,
-		events.TypeRollbackStarted, events.TypeDeployReady,
+		events.TypeDeployRequested, events.TypeDeployProgressing, events.TypeDeployReady,
+		events.TypePromotionRequested, events.TypeApprovalApproved, events.TypePromoteStarted, events.TypeDeployProgressing, events.TypeDeployReady,
+		events.TypeRollbackStarted, events.TypeDeployProgressing, events.TypeDeployReady,
 	}
 	if len(types) != len(want) {
 		t.Fatalf("audit types =\n%v\nwant\n%v", types, want)

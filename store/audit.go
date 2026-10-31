@@ -47,20 +47,14 @@ func (q queries) ListAudit(ctx context.Context, model string, beforeSeq int64, l
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := q.db.Query(ctx, `SELECT seq, event_id, type, actor, model, version, environment,
-			COALESCE(deployment_id::text, ''), payload, occurred_at
+	rows, err := q.db.Query(ctx, `SELECT `+auditColumns+`
 		FROM audit_events
 		WHERE ($1 = '' OR model = $1) AND ($2 = 0 OR seq < $2)
 		ORDER BY seq DESC LIMIT $3`, model, beforeSeq, limit)
 	if err != nil {
 		return nil, wrap("list audit", err)
 	}
-	evs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (events.Event, error) {
-		var e events.Event
-		err := r.Scan(&e.Seq, &e.ID, &e.Type, &e.Actor, &e.Model, &e.Version, &e.Environment,
-			&e.DeploymentID, &e.Data, &e.OccurredAt)
-		return e, err
-	})
+	evs, err := pgx.CollectRows(rows, scanAudit)
 	return evs, wrap("list audit", err)
 }
 
@@ -131,4 +125,41 @@ func (q queries) OutboxBacklog(ctx context.Context) (int, time.Duration, error) 
 		return n, 0, nil
 	}
 	return n, time.Since(*oldest), nil
+}
+
+// auditColumns is the column list scanned by scanAudit.
+const auditColumns = `seq, event_id, type, actor, model, version, environment,
+	COALESCE(deployment_id::text, ''), payload, occurred_at`
+
+func scanAudit(r pgx.CollectableRow) (events.Event, error) {
+	var e events.Event
+	err := r.Scan(&e.Seq, &e.ID, &e.Type, &e.Actor, &e.Model, &e.Version, &e.Environment,
+		&e.DeploymentID, &e.Data, &e.OccurredAt)
+	return e, err
+}
+
+// ListAuditAfter returns audit events with afterSeq < seq <= uptoSeq, oldest
+// first. model may be empty; uptoSeq <= 0 means no upper bound. It backs the
+// live event stream: the tailer polls it and reconnecting clients replay
+// from it by sequence number.
+func (q queries) ListAuditAfter(ctx context.Context, model string, afterSeq, uptoSeq int64, limit int) ([]events.Event, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := q.db.Query(ctx, `SELECT `+auditColumns+`
+		FROM audit_events
+		WHERE seq > $1 AND ($2 <= 0 OR seq <= $2) AND ($3 = '' OR model = $3)
+		ORDER BY seq LIMIT $4`, afterSeq, uptoSeq, model, limit)
+	if err != nil {
+		return nil, wrap("list audit after", err)
+	}
+	evs, err := pgx.CollectRows(rows, scanAudit)
+	return evs, wrap("list audit after", err)
+}
+
+// MaxAuditSeq returns the highest audit sequence number (0 if empty).
+func (q queries) MaxAuditSeq(ctx context.Context) (int64, error) {
+	var n int64
+	err := q.db.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM audit_events`).Scan(&n)
+	return n, wrap("max audit seq", err)
 }
