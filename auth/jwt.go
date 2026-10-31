@@ -107,15 +107,28 @@ type ErrorWriter func(w http.ResponseWriter, r *http.Request, err error)
 // Middleware rejects requests without a valid bearer token and stores the
 // authenticated user in the request context.
 func (a *Authenticator) Middleware(onErr ErrorWriter) func(http.Handler) http.Handler {
+	return a.middleware(onErr, false)
+}
+
+// QueryTokenMiddleware is Middleware that also accepts the token as an
+// access_token query parameter when no Authorization header is sent. It
+// exists only for the Server-Sent Events endpoint, because the browser
+// EventSource API cannot set request headers. Tokens in URLs can end up in
+// proxy and access logs, so use it nowhere else and keep console tokens
+// short-lived.
+func (a *Authenticator) QueryTokenMiddleware(onErr ErrorWriter) func(http.Handler) http.Handler {
+	return a.middleware(onErr, true)
+}
+
+func (a *Authenticator) middleware(onErr ErrorWriter, allowQuery bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			h := r.Header.Get("Authorization")
-			scheme, tok, ok := strings.Cut(h, " ")
-			if !ok || !strings.EqualFold(scheme, "Bearer") || tok == "" {
-				onErr(w, r, fmt.Errorf("%w: missing bearer token", domain.ErrUnauthorized))
+			tok, err := tokenFrom(r, allowQuery)
+			if err != nil {
+				onErr(w, r, err)
 				return
 			}
-			u, err := a.Verify(strings.TrimSpace(tok))
+			u, err := a.Verify(tok)
 			if err != nil {
 				onErr(w, r, err)
 				return
@@ -123,6 +136,20 @@ func (a *Authenticator) Middleware(onErr ErrorWriter) func(http.Handler) http.Ha
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), u)))
 		})
 	}
+}
+
+func tokenFrom(r *http.Request, allowQuery bool) (string, error) {
+	if h := r.Header.Get("Authorization"); h != "" || !allowQuery {
+		scheme, tok, ok := strings.Cut(h, " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(tok) == "" {
+			return "", fmt.Errorf("%w: missing bearer token", domain.ErrUnauthorized)
+		}
+		return strings.TrimSpace(tok), nil
+	}
+	if tok := r.URL.Query().Get("access_token"); tok != "" {
+		return tok, nil
+	}
+	return "", fmt.Errorf("%w: missing bearer token or access_token parameter", domain.ErrUnauthorized)
 }
 
 // CurrentUser returns the authenticated user or an ErrUnauthorized error.

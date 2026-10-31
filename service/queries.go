@@ -163,3 +163,25 @@ func (s *Service) Dashboard(ctx context.Context, u domain.User) ([]events.ModelH
 	}
 	return s.Store.ListDashboard(ctx)
 }
+
+// AuthorizeStream checks u may subscribe to the live event stream, optionally
+// filtered to one model (which must exist).
+func (s *Service) AuthorizeStream(ctx context.Context, u domain.User, model string) error {
+	if err := read(u); err != nil {
+		return err
+	}
+	if model == "" {
+		return nil
+	}
+	_, err := s.Store.GetModel(ctx, model)
+	return err
+}
+
+// ReplayEvents returns audit events with afterSeq < seq <= uptoSeq, oldest
+// first, for a reconnecting stream client (Last-Event-ID).
+func (s *Service) ReplayEvents(ctx context.Context, u domain.User, model string, afterSeq, uptoSeq int64, limit int) ([]events.Event, error) {
+	if err := read(u); err != nil {
+		return nil, err
+	}
+	return s.Store.ListAuditAfter(ctx, model, afterSeq, uptoSeq, limit)
+}

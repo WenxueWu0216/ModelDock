@@ -12,6 +12,7 @@ import (
 
 	"github.com/wenxuewu0216/modeldock/auth"
 	"github.com/wenxuewu0216/modeldock/service"
+	"github.com/wenxuewu0216/modeldock/stream"
 )
 
 // HTTPMetrics instruments the API.
@@ -81,6 +82,12 @@ type Config struct {
 	Ready func(ctx context.Context) error
 	// Playground serves the GraphQL playground at /playground.
 	Playground bool
+	// Hub, if set, enables the live event stream at /api/v1/events/stream.
+	Hub *stream.Hub
+	// StreamHeartbeat is the SSE keep-alive comment interval (default 15s).
+	StreamHeartbeat time.Duration
+	// CORSOrigins lists browser origins allowed to call the API ("*" = any).
+	CORSOrigins []string
 }
 
 // NewHandler builds the full HTTP handler: unauthenticated health and
@@ -116,9 +123,19 @@ func NewHandler(cfg Config) http.Handler {
 
 	mw := cfg.Auth.Middleware(writeError(log))
 	root.Handle("/api/", mw(authed))
+	if cfg.Hub != nil {
+		hb := cfg.StreamHeartbeat
+		if hb <= 0 {
+			hb = defaultHeartbeat
+		}
+		sh := &streamHandler{svc: cfg.Service, hub: cfg.Hub, log: log, heartbeat: hb, replayMax: defaultReplayMax}
+		// Not under routeMux: a stream lives for minutes, which would only
+		// distort the latency histogram. It has its own metrics.
+		root.Handle("GET /api/v1/events/stream", cfg.Auth.QueryTokenMiddleware(writeError(log))(sh))
+	}
 	root.Handle("/graphql", mw(authed))
 	if cfg.Playground {
 		root.Handle("GET /playground", playgroundHandler())
 	}
-	return root
+	return withCORS(cfg.CORSOrigins, root)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/wenxuewu0216/modeldock/kube"
 	"github.com/wenxuewu0216/modeldock/service"
 	"github.com/wenxuewu0216/modeldock/store/storetest"
+	"github.com/wenxuewu0216/modeldock/stream"
 )
 
 type client struct {
@@ -77,7 +78,13 @@ func (c client) gql(query string, vars map[string]any) (data map[string]any, err
 type harness struct {
 	srv *httptest.Server
 	rec *kube.Reconciler
+	hub *stream.Hub
+	reg *prometheus.Registry
 	as  func(id string, role domain.Role) client
+	// caughtUp waits until the tailer has published every committed event.
+	caughtUp func()
+	// token mints a raw JWT for id/role.
+	token func(id string, role domain.Role) string
 }
 
 func newHarness(t *testing.T) harness {
@@ -91,16 +98,47 @@ func newHarness(t *testing.T) harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hub := stream.NewHub(stream.DefaultBuffer, stream.NewMetrics(reg))
+	tailer := &stream.Tailer{Source: s, Hub: hub, Interval: 10 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := tailer.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); tailer.Run(ctx) }()
 	h := api.NewHandler(api.Config{Service: svc, Auth: authn, Metrics: api.NewHTTPMetrics(reg), Gatherer: reg,
-		Ready: s.Ping, Playground: true})
+		Ready: s.Ping, Playground: true, Hub: hub, StreamHeartbeat: 100 * time.Millisecond,
+		CORSOrigins: []string{"http://localhost:5173"}})
 	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-	return harness{srv: srv, rec: rec, as: func(id string, role domain.Role) client {
+	t.Cleanup(func() {
+		hub.Close()
+		srv.Close()
+		cancel()
+		<-done
+	})
+	mint := func(id string, role domain.Role) string {
 		tok, err := authn.Issue(domain.User{ID: id, Role: role}, time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return client{t: t, base: srv.URL, token: tok}
+		return tok
+	}
+	caughtUp := func() {
+		t.Helper()
+		for i := 0; i < 500; i++ {
+			max, err := s.MaxAuditSeq(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hub.Watermark() >= max {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("event stream tailer did not catch up")
+	}
+	return harness{srv: srv, rec: rec, hub: hub, reg: reg, token: mint, caughtUp: caughtUp, as: func(id string, role domain.Role) client {
+		return client{t: t, base: srv.URL, token: mint(id, role)}
 	}}
 }
 

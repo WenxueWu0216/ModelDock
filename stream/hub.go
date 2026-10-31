@@ -178,6 +178,13 @@ func (h *Hub) Publish(ev events.Event) {
 	}
 }
 
+// Watermark returns the highest sequence published so far.
+func (h *Hub) Watermark() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.last
+}
+
 // Len returns the number of current subscribers.
 func (h *Hub) Len() int {
 	h.mu.Lock()
