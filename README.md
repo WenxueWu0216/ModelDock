@@ -192,6 +192,127 @@ mutation { rollback(model: "iris", environment: "prod") { revision version kind 
 Errors carry `extensions.code`: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`,
 `CONFLICT`, `BAD_USER_INPUT`, or `INTERNAL`.
 
+## Live event stream (SSE)
+
+`GET /api/v1/events/stream` streams every audit event to the browser as
+[Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html):
+deploy, promote, rollback and approval events, plus every deployment status
+change (`pending → progressing → ready | failed`).
+
+```sh
+V=$(go run ./cmd/modeldock token -sub vic -role viewer)
+curl -N -H "Authorization: Bearer $V" "$API/api/v1/events/stream?model=iris"
+curl -N -H "Authorization: Bearer $V" -H "Last-Event-ID: 42" "$API/api/v1/events/stream"   # resume
+```
+
+| | |
+|---|---|
+| Auth | Same JWT and RBAC as the rest of the API; any role (viewer or above). `EventSource` cannot set headers, so this route alone also accepts `?access_token=<jwt>`. A sent `Authorization` header always wins. |
+| Filter | `?model=<name>` (404 if the model does not exist) |
+| Resume | `Last-Event-ID` header (sent automatically by `EventSource` on reconnect) or `?lastEventId=` |
+| Keep-alive | `: ping` comment every 15 s; `retry: 3000` tells the browser to reconnect after 3 s |
+| Headers | `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no` |
+
+### Event contract
+
+Each event is one frame:
+
+```
+id: 57
+event: deploy.ready
+data: {"seq":57,"eventId":"…","type":"deploy.ready","actor":"system:reconciler","model":"iris","version":"1.1.0","environment":"prod","deploymentId":"…","revision":3,"kind":"promote","status":"ready","occurredAt":"2026-10-31T21:32:01.82Z","data":{…}}
+```
+
+- `id` is the audit log sequence number (`audit_events.seq`). It is globally
+  ordered; a client resumes by sending the last id it saw.
+- `event` is the event type. The data JSON has these fields:
+
+| `event` / `type` | `status` | `kind` | other fields |
+|---|---|---|---|
+| `deploy.requested` | `pending` | `deploy` | `revision`, `deploymentId` |
+| `promote.started` | `pending` | `promote` | `revision`, `deploymentId` |
+| `rollback.started` | `pending` | `rollback` \| `auto_rollback` | `revision`, `deploymentId`, `data.fromVersion`, `data.reason` |
+| `deploy.progressing` | `progressing` | kind of the revision | `revision`, `deploymentId` |
+| `deploy.ready` | `ready` | kind of the revision | `revision`, `deploymentId` |
+| `deploy.failed` | `failed` | kind of the revision | `revision`, `deploymentId`, `data.reason` |
+| `approval.requested` / `approval.approved` / `approval.rejected` | | | `approvalId`, `data.comment`, `data.requestedBy` |
+| `registry.model_registered` / `registry.version_registered` | | | |
+| `inference_health.changed` | | | `data.status` (`healthy` \| `degraded` \| `unavailable`) |
+| `stream.reset` (control) | | | the client is too far behind (> 10 000 events) and should reload state |
+
+Common fields on every event: `seq`, `eventId`, `type`, `actor` (JWT
+subject, or `system:reconciler`), `model`, `version`, `environment`,
+`occurredAt`, and `data` (the raw audit payload). Starting a new revision
+implicitly marks the previous revision of that model/environment
+`superseded` (promote/deploy) or `rolled_back` (rollback); there is no
+separate event for that.
+
+### Design
+
+```mermaid
+flowchart LR
+  SVC[service tx:<br/>state + audit_events + outbox] --> PG[(audit_events<br/>seq bigserial)]
+  PG -- "poll seq > cursor<br/>every 200 ms" --> T[Tailer<br/>in-order, gap-aware]
+  T --> H[Hub]
+  H -- "chan, cap 64" --> C1[SSE client]
+  H -- "chan, cap 64" --> C2[SSE client]
+  PG -. "replay seq in (Last-Event-ID, watermark]" .-> C2
+```
+
+**Source: tail the audit log, not Kafka and not in-process callbacks.**
+Every status change already writes an `audit_events` row in the same
+transaction as the change, so the audit log is the one place that is both
+complete and ordered.
+- An in-process broker fed by the service would miss events from other
+  replicas, because only the leader runs the reconciler (and so produces
+  every `progressing`/`ready`/`failed`).
+- A Kafka consumer group per replica would work across replicas, but adds
+  the relay's polling lag on top. It does not exist in `-events log` mode.
+  Replay would still have to read Postgres, giving two sources to reconcile
+  at the hand-over.
+- Tailing the table gives live delivery and `Last-Event-ID` replay from the
+  same rows with the same ids. Every API replica runs its own tailer; no
+  leader is needed. The cost is one indexed query per poll interval per
+  replica (`-stream-poll-interval`, default 200 ms), which also bounds the
+  added latency.
+
+**Ordering and gaps.** `seq` is assigned at INSERT, so transactions can
+commit out of order: seq 51 may be visible while 50 is still in flight. The
+tailer keeps a cursor below which everything is resolved. It holds events
+back behind a missing seq until the gap fills, or for at most 3 s. Sequences
+are not transactional, so a rolled-back transaction leaves a permanent gap
+(counted in `modeldock_sse_tailer_gaps_skipped_total`). Events reach clients
+in strict `seq` order, which is what makes "last id seen" a correct resume
+point. One edge case remains: a transaction that commits more than 3 s after
+taking its seq is skipped by live clients. It is still in the audit log and
+shows up on the next page load.
+
+**Fan-out and backpressure.** The hub gives each connection a buffered
+channel (64 events). `Publish` never blocks. If a client's buffer is full,
+the hub drops that client (`modeldock_sse_slow_client_drops_total`), and its
+handler flushes what is buffered and ends the response. The browser then
+reconnects with `Last-Event-ID` and replays the rest from the database. A
+slow client costs itself a reconnect, never the hub or other clients a
+stall. Each write also has a 10 s deadline, so a stalled TCP peer cannot pin
+a handler goroutine. On client disconnect the request context is cancelled
+and the subscription is removed (`context.AfterFunc`). On server shutdown
+the hub closes every stream so `http.Server.Shutdown` does not wait on them.
+
+**Resume without gaps or duplicates.** The handler subscribes first and gets
+the hub's watermark: the highest seq already handed to subscribers. It then
+replays `Last-Event-ID < seq <= watermark` from `audit_events` (filtered by
+model, 500 per page) and switches to the live channel, which carries exactly
+the events above the watermark.
+
+**Metrics:** `modeldock_sse_connections` (gauge),
+`modeldock_sse_events_sent_total`, `modeldock_sse_slow_client_drops_total`,
+`modeldock_sse_tailer_gaps_skipped_total`.
+
+**CORS.** `-cors-origins` / `MODELDOCK_CORS_ORIGINS` (comma-separated,
+default `http://localhost:5173` for the Vite dev server, `*` for any, empty
+to disable). Preflights are answered before auth. Credentials are never
+allowed because auth uses bearer tokens, not cookies.
+
 ## RBAC
 
 | | viewer | deployer | approver | admin |
