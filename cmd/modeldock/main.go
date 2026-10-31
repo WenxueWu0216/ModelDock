@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,6 +49,15 @@ func envDuration(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
 		}
 	}
 	return def
@@ -119,7 +129,8 @@ func serve(ctx context.Context, log *slog.Logger, args []string) error {
 	corsOrigins := fs.String("cors-origins", env("MODELDOCK_CORS_ORIGINS", "http://localhost:5173"), "comma-separated browser origins allowed by CORS (\"*\" = any, empty = CORS off)")
 	streamPoll := fs.Duration("stream-poll-interval", envDuration("MODELDOCK_STREAM_POLL_INTERVAL", 200*time.Millisecond), "how often the SSE tailer polls the audit log")
 	console := fs.Bool("console", env("MODELDOCK_CONSOLE", "true") == "true", "serve the web console at / (embedded with -tags embedweb)")
-	fakeReadyPolls := fs.Int("fake-ready-polls", 1, "fake kube: status polls before a rollout is ready")
+	fakeFailImage := fs.String("fake-fail-image", env("MODELDOCK_FAKE_FAIL_IMAGE", ""), "fake kube: rollouts of images containing this substring fail (demo of failure + auto-rollback)")
+	fakeReadyPolls := fs.Int("fake-ready-polls", envInt("MODELDOCK_FAKE_READY_POLLS", 1), "fake kube: status polls before a rollout is ready")
 	_ = fs.Parse(args)
 
 	authn, err := auth.NewAuthenticator([]byte(c.secret), c.issuer, c.audience)
@@ -140,6 +151,14 @@ func serve(ctx context.Context, log *slog.Logger, args []string) error {
 	case "fake":
 		f := kube.NewFake()
 		f.ReadyAfterPolls = *fakeReadyPolls
+		if sub := *fakeFailImage; sub != "" {
+			f.OutcomeFor = func(s kube.WorkloadSpec) kube.Outcome {
+				if strings.Contains(s.Image, sub) {
+					return kube.FailFast
+				}
+				return kube.BecomeReady
+			}
+		}
 		kc = f
 		log.Warn("using in-memory fake Kubernetes client: nothing is deployed to a real cluster")
 	case "real":

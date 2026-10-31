@@ -1,5 +1,5 @@
-# Local stack: Postgres, single-node Kafka (KRaft), the ModelDock API and the
-# dashboard consumer. Kubernetes is the in-memory fake (MODELDOCK_KUBE=fake);
+# Local stack: Postgres, single-node Kafka (KRaft), the ModelDock API (with the
+# web console embedded, http://localhost:8080) and the dashboard consumer. Kubernetes is the in-memory fake (MODELDOCK_KUBE=fake);
 # point MODELDOCK_KUBE=real + a kubeconfig at a cluster to deploy for real.
 name: modeldock
 
@@ -53,6 +53,15 @@ services:
       MODELDOCK_KAFKA_BROKERS: kafka:9092
       MODELDOCK_KUBE: fake
       MODELDOCK_AUTO_ROLLBACK: "true"
+      # Reconciler status polls (one every 2s) a fake rollout stays
+      # "progressing" before it is ready; raise it to watch rollouts in the
+      # console, e.g. FAKE_READY_POLLS=3 (scripts/demo-live.sh does this).
+      MODELDOCK_FAKE_READY_POLLS: ${FAKE_READY_POLLS:-1}
+      # Fake rollouts of images containing this substring fail (shows failure
+      # and auto-rollback in the console), e.g. FAKE_FAIL_IMAGE=broken.
+      MODELDOCK_FAKE_FAIL_IMAGE: ${FAKE_FAIL_IMAGE:-}
+      # The console is same-origin here; this allows the Vite dev server too.
+      MODELDOCK_CORS_ORIGINS: ${MODELDOCK_CORS_ORIGINS:-http://localhost:5173}
     ports: ["8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }
