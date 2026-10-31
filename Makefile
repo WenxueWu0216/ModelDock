@@ -16,7 +16,7 @@ export MODELDOCK_TEST_KAFKA_BROKERS ?= localhost:29092
 export MODELDOCK_JWT_SECRET ?= dev-only-secret-change-me-0123456789
 
 .PHONY: help setup generate build build-go web web-test web-dev test test-unit test-race lint fmt manifests \
-        model-server-test deps-up deps-down run compose-up compose-down demo demo-live loadtest kind-e2e images clean
+        model-server-test deps-up deps-down run compose-up compose-down demo demo-live walkthrough loadtest kind-e2e images clean
 
 help: ## list targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -90,6 +90,9 @@ compose-down: ## stop the stack and delete its volumes
 
 demo: ## curl/GraphQL walkthrough against localhost:8080
 	MODELDOCK_BIN=$(BIN) ./scripts/demo.sh
+
+walkthrough: ## browser walkthrough of the console (Playwright): checks, screenshots, latency
+	MODELDOCK_BIN=$(BIN) node scripts/console-walkthrough.cjs
 
 demo-live: ## slowed-down rollout to watch live in the console (http://localhost:8080)
 	MODELDOCK_BIN=$(BIN) ./scripts/demo-live.sh
