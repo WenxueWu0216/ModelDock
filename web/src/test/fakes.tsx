@@ -38,7 +38,7 @@ export class FakeEventSource {
     this.listeners.get(m.type)?.forEach((fn) => fn(ev));
   }
   static last(): FakeEventSource {
-    const es = FakeEventSource.instances.at(-1);
+    const es = FakeEventSource.instances[FakeEventSource.instances.length - 1];
     if (!es) throw new Error("no EventSource opened");
     return es;
   }
