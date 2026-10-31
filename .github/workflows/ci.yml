@@ -57,6 +57,31 @@ jobs:
       - name: coverage summary
         run: go tool cover -func=coverage.txt | tail -1
 
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: typecheck
+        run: npm run typecheck
+      - name: test (Vitest + Testing Library)
+        run: npm test
+      - name: build
+        run: npm run build
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22.x", cache-dependency-path: go.sum }
+      - name: Go binary with the console embedded
+        working-directory: .
+        run: go build -tags embedweb -o /tmp/modeldock ./cmd/modeldock && go vet -tags embedweb ./web/ ./api/
+
   manifests:
     runs-on: ubuntu-latest
     steps:

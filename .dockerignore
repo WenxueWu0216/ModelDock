@@ -3,3 +3,5 @@ model-server/
 docs/
 loadtest/
 .git/
+web/node_modules/
+web/dist/

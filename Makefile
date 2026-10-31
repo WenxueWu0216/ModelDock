@@ -15,8 +15,8 @@ export MODELDOCK_TEST_DATABASE_URL ?= postgres://modeldock:modeldock@localhost:5
 export MODELDOCK_TEST_KAFKA_BROKERS ?= localhost:29092
 export MODELDOCK_JWT_SECRET ?= dev-only-secret-change-me-0123456789
 
-.PHONY: help setup generate build test test-unit test-race lint fmt manifests \
-        model-server-test deps-up deps-down run compose-up compose-down demo loadtest kind-e2e images clean
+.PHONY: help setup generate build build-go web web-test web-dev test test-unit test-race lint fmt manifests \
+        model-server-test deps-up deps-down run compose-up compose-down demo demo-live loadtest kind-e2e images clean
 
 help: ## list targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -30,8 +30,20 @@ setup: ## download Go modules, install lint/validation tools, create the model-s
 generate: ## regenerate gqlgen code from api/graph/schema.graphqls
 	cd api/graph && $(GO) run github.com/99designs/gqlgen generate
 
-build: ## build the modeldock binary
+build: web ## build the modeldock binary with the web console embedded
+	CGO_ENABLED=0 $(GO) build -trimpath -tags embedweb -o $(BIN) ./cmd/modeldock
+
+build-go: ## build the modeldock binary without the console (no Node needed)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN) ./cmd/modeldock
+
+web: ## build the React console into web/dist
+	cd web && npm ci --no-audit --no-fund && npm run build
+
+web-test: ## typecheck and test the React console (Vitest)
+	cd web && npm ci --no-audit --no-fund && npm run typecheck && npm test
+
+web-dev: ## Vite dev server on :5173, proxying the API at localhost:8080
+	cd web && npm ci --no-audit --no-fund && npm run dev
 
 test: deps-up ## all Go tests incl. Postgres + Kafka integration (starts deps)
 	$(GO) test -count=1 ./...
@@ -54,7 +66,7 @@ lint: ## gofmt check, go vet, staticcheck (+ golangci-lint if installed)
 	$(GOBIN)/staticcheck ./...
 	@if command -v golangci-lint >/dev/null; then golangci-lint run ./...; else echo "golangci-lint not installed, skipped"; fi
 
-manifests: build ## validate generated model manifests and the Helm chart with kubeconform
+manifests: build-go ## validate generated model manifests and the Helm chart with kubeconform
 	$(BIN) render > /tmp/modeldock-render.yaml
 	$(GOBIN)/kubeconform -strict -summary -kubernetes-version $(K8S_VERSION) /tmp/modeldock-render.yaml
 	helm lint deploy/helm/modeldock --set secret.databaseUrl=x --set secret.jwtSecret=$(MODELDOCK_JWT_SECRET)
@@ -79,6 +91,9 @@ compose-down: ## stop the stack and delete its volumes
 demo: ## curl/GraphQL walkthrough against localhost:8080
 	MODELDOCK_BIN=$(BIN) ./scripts/demo.sh
 
+demo-live: ## slowed-down rollout to watch live in the console (http://localhost:8080)
+	MODELDOCK_BIN=$(BIN) ./scripts/demo-live.sh
+
 loadtest: ## vegeta load test against localhost:8080 (run `make demo` first)
 	MODELDOCK_BIN=$(BIN) ./loadtest/run.sh
 
@@ -90,4 +105,4 @@ images: ## build the modeldock and model-server images
 	docker build -t modeldock/iris-server:1.0.0 model-server
 
 clean:
-	rm -rf bin loadtest/out
+	rm -rf bin loadtest/out web/dist web/node_modules
